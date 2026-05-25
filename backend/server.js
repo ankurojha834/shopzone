@@ -4,7 +4,11 @@ const fetch = require('node-fetch');
 
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "https://shopzone-frontend-g8lb.onrender.com",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
+}));
 app.use(express.json());
 
 // ─── Groq Config ─────
