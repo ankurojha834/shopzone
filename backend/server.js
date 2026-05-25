@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 
-
 const app = express();
 app.use(cors({
   origin: "https://shopzone-frontend-g8lb.onrender.com",
@@ -11,13 +10,11 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ─── Groq Config ─────
 require('dotenv').config();
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 
-// ─── In-memory Data ───────────
 let cart = [];
 let orders = [];
 let nextOrderId = 1001;
@@ -39,8 +36,13 @@ const products = [
 
 const categories = ["All", "Electronics", "Fashion", "Kitchen", "Books", "Home", "Toys", "Sports"];
 
-// ─── Groq Helper ───────────────────────────────────────────────────
+// ─── Groq Helper ──────────────────────────────────────────────────
 async function askGroq(systemPrompt, userMessage) {
+  // FIX 1: Guard against missing API key
+  if (!GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY environment variable is not set on this server');
+  }
+
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -60,14 +62,14 @@ async function askGroq(systemPrompt, userMessage) {
 
   if (!response.ok) {
     const err = await response.json();
-    throw new Error(err.error?.message || 'Groq API error');
+    throw new Error(`Groq API error (${response.status}): ${err.error?.message || 'unknown'}`);
   }
 
   const data = await response.json();
   return data.choices[0].message.content;
 }
 
-// ─── Auth (in-memory) ─────────────────────────────────────────────
+// ─── Auth ─────────────────────────────────────────────────────────
 let users = [];
 let nextUserId = 1;
 
@@ -79,7 +81,7 @@ app.post('/api/auth/register', (req, res) => {
     return res.status(409).json({ error: 'Email already registered' });
 
   const user = { id: nextUserId++, name, email, createdAt: new Date().toISOString() };
-  users.push({ ...user, password }); // store password separately (plain text — demo only)
+  users.push({ ...user, password });
   res.status(201).json({ user });
 });
 
@@ -96,7 +98,7 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ user });
 });
 
-
+// ─── Smart Search ─────────────────────────────────────────────────
 app.get('/api/smart-search', async (req, res) => {
   const { q } = req.query;
   if (!q || q.trim() === '') {
@@ -117,21 +119,29 @@ If nothing matches, return: []`;
 
     const userMessage = `Products:\n${productList}\n\nUser query: "${q}"`;
     const aiResponse = await askGroq(systemPrompt, userMessage);
-    const cleanResponse = aiResponse.trim().replace(/```json|```/g, '').trim();
+
+    // FIX 2: Robust extraction — handles ```json\n[...]\n``` and plain [...]
+    const jsonMatch = aiResponse.match(/\[[\s\S]*?\]/);
     let matchedIds = [];
 
-    try {
-      matchedIds = JSON.parse(cleanResponse);
-      if (!Array.isArray(matchedIds)) matchedIds = [];
-    } catch {
-      matchedIds = [];
+    if (jsonMatch) {
+      try {
+        matchedIds = JSON.parse(jsonMatch[0]);
+        if (!Array.isArray(matchedIds)) matchedIds = [];
+        // Ensure all IDs are numbers
+        matchedIds = matchedIds.filter(id => typeof id === 'number');
+      } catch {
+        matchedIds = [];
+      }
     }
 
     const matchedProducts = products.filter(p => matchedIds.includes(p.id));
     res.json({ query: q, total: matchedProducts.length, products: matchedProducts, ai_powered: true });
 
   } catch (error) {
-    console.error('Groq error:', error.message);
+    // FIX 3: Log full stack so Render logs show the exact failure
+    console.error('Smart search error:', error.message);
+    console.error(error.stack);
     res.status(500).json({ error: 'AI search failed', details: error.message });
   }
 });
@@ -160,9 +170,7 @@ app.get('/api/categories', (req, res) => res.json(categories));
 const cartTotal = () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 const cartCount = () => cart.reduce((s, i) => s + i.quantity, 0);
 
-app.get('/api/cart', (req, res) => {
-  res.json({ items: cart, total: cartTotal(), count: cartCount() });
-});
+app.get('/api/cart', (req, res) => res.json({ items: cart, total: cartTotal(), count: cartCount() }));
 
 app.post('/api/cart', (req, res) => {
   const { productId, quantity = 1 } = req.body;
